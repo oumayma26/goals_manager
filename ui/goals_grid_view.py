@@ -1,12 +1,12 @@
 """
 ui/goals_grid_view.py
-Grille responsive de cards Goal avec tri par progression.
+Grille responsive de cards Goal avec image stylisée (bord arrondi + ombre).
 """
 
 import os
 import customtkinter as ctk
 from typing import Callable, List
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFilter
 from models import Goal
 from services import GoalService
 
@@ -14,6 +14,7 @@ from services import GoalService
 class GoalsGridView(ctk.CTkFrame):
     """
     Vue grille de goals — 3 colonnes, cards fluides, tri par progression.
+    Images avec bord arrondi et effet d'ombre.
     """
 
     def __init__(
@@ -50,7 +51,6 @@ class GoalsGridView(ctk.CTkFrame):
 
     def _build_grid(self) -> None:
         """Construit la grille de cards."""
-        # Scrollable container
         self.scroll = ctk.CTkScrollableFrame(
             self,
             fg_color="transparent",
@@ -85,7 +85,7 @@ class GoalsGridView(ctk.CTkFrame):
         ).pack(pady=(5, 0))
 
     def _create_goal_card(self, goal: Goal, index: int) -> None:
-        """Crée une card Goal complète."""
+        """Crée une card Goal avec image stylisée."""
         progress = self.service.get_goal_progress(goal.id)
         percentage = progress["percentage"]
         goal_color = goal.color or "#3B82F6"
@@ -99,8 +99,7 @@ class GoalsGridView(ctk.CTkFrame):
             fg_color="#FFFFFF",
             corner_radius=16,
             border_width=1,
-            border_color="#E2E8F0",
-            height=300
+            border_color="#E2E8F0"
         )
         card.grid(row=row, column=col, padx=8, pady=8, sticky="nsew")
         card.grid_propagate(False)
@@ -109,46 +108,36 @@ class GoalsGridView(ctk.CTkFrame):
         card.bind("<Button-1>", lambda e, gid=goal.id: self.on_select_goal(gid))
         card.configure(cursor="hand2")
 
-        # ─── IMAGE / PLACEHOLDER ───
-        img_frame = ctk.CTkFrame(card, fg_color="transparent", height=120, corner_radius=16)
-        img_frame.pack(fill="x", padx=0, pady=0)
-        img_frame.pack_propagate(False)
-        img_frame.bind("<Button-1>", lambda e, gid=goal.id: self.on_select_goal(gid))
+        # ─── CONTENEUR IMAGE AVEC OMBRE ───
+        img_container = ctk.CTkFrame(card, fg_color="transparent", height=130)
+        img_container.pack(fill="x", padx=12, pady=(12, 0))
+        img_container.pack_propagate(False)
 
         if goal.image_path and os.path.exists(goal.image_path):
             try:
-                img = Image.open(goal.image_path)
-                img = img.convert("RGB")
-                # Crop center pour ratio 16:9
-                w, h = img.size
-                target_ratio = 16 / 9
-                current_ratio = w / h
-                if current_ratio > target_ratio:
-                    new_w = int(h * target_ratio)
-                    left = (w - new_w) // 2
-                    img = img.crop((left, 0, left + new_w, h))
-                else:
-                    new_h = int(w / target_ratio)
-                    top = (h - new_h) // 2
-                    img = img.crop((0, top, w, top + new_h))
-
-                img = img.resize((340, 120), Image.Resampling.LANCZOS)
-                ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(340, 120))
-                img_label = ctk.CTkLabel(img_frame, text="", image=ctk_img, corner_radius=16)
+                # Créer l'image avec ombre
+                img_with_shadow = self._create_image_with_shadow(
+                    goal.image_path, 
+                    width=320, 
+                    height=130, 
+                    radius=12
+                )
+                ctk_img = ctk.CTkImage(light_image=img_with_shadow, dark_image=img_with_shadow, size=(320, 130))
+                img_label = ctk.CTkLabel(img_container, text="", image=ctk_img)
                 img_label.pack(fill="both", expand=True)
                 img_label.bind("<Button-1>", lambda e, gid=goal.id: self.on_select_goal(gid))
             except Exception:
-                self._build_placeholder(img_frame, goal, goal_color)
+                self._build_placeholder(img_container, goal, goal_color)
         else:
-            self._build_placeholder(img_frame, goal, goal_color)
+            self._build_placeholder(img_container, goal, goal_color)
 
         # ─── BANDE COULEUR ───
-        color_bar = ctk.CTkFrame(card, height=4, fg_color=goal_color, corner_radius=0)
-        color_bar.pack(fill="x", padx=0, pady=0)
+        color_bar = ctk.CTkFrame(card, height=3, fg_color=goal_color, corner_radius=0)
+        color_bar.pack(fill="x", padx=12, pady=(8, 0))
 
         # ─── CONTENU ───
         content = ctk.CTkFrame(card, fg_color="transparent")
-        content.pack(fill="both", expand=True, padx=16, pady=12)
+        content.pack(fill="both", expand=True, padx=16, pady=10)
         content.bind("<Button-1>", lambda e, gid=goal.id: self.on_select_goal(gid))
 
         # Titre + priorité
@@ -181,7 +170,7 @@ class GoalsGridView(ctk.CTkFrame):
 
         # Description
         if goal.description:
-            desc_text = goal.description[:60] + "..." if len(goal.description) > 60 else goal.description
+            desc_text = goal.description[:55] + "..." if len(goal.description) > 55 else goal.description
             ctk.CTkLabel(
                 content,
                 text=desc_text,
@@ -189,18 +178,18 @@ class GoalsGridView(ctk.CTkFrame):
                 text_color="#64748B",
                 anchor="w",
                 wraplength=280
-            ).pack(fill="x", pady=(6, 0))
+            ).pack(fill="x", pady=(4, 0))
 
         # ─── BARRE DE PROGRESSION ───
+                # ─── BARRE DE PROGRESSION ───
         progress_frame = ctk.CTkFrame(content, fg_color="transparent")
-        progress_frame.pack(fill="x", pady=(12, 4))
+        progress_frame.pack(fill="x", pady=(10, 4))
 
-        # Label %
         percent_color = "#10B981" if percentage >= 100 else goal_color
         ctk.CTkLabel(
             progress_frame,
             text=f"{percentage:.0f}%",
-            font=ctk.CTkFont(size=18, weight="bold"),
+            font=ctk.CTkFont(size=16, weight="bold"),
             text_color=percent_color
         ).pack(side="right")
 
@@ -211,24 +200,27 @@ class GoalsGridView(ctk.CTkFrame):
             text_color="#94A3B8"
         ).pack(side="left")
 
-        # Barre
-        bar_bg = ctk.CTkFrame(content, height=8, corner_radius=4, fg_color="#E2E8F0")
-        bar_bg.pack(fill="x", pady=(0, 8))
-        bar_bg.pack_propagate(False)
+        # Barre de fond
+        bar_bg = ctk.CTkFrame(content, height=6, corner_radius=3, fg_color="#E2E8F0")
+        bar_bg.pack(fill="x", pady=(0, 6))
+        bar_bg.pack_propagate(False)  # Empêche le fill de redimensionner le fond
 
-        fill_width = max(1, int(300 * (percentage / 100))) if percentage > 0 else 1
+        # Barre de remplissage - utilise place() pour contrôler la largeur
+        fill_width_pct = percentage / 100.0
+        fill_width_pct = max(0.0, min(1.0, fill_width_pct))  # Clamp entre 0 et 1
+
         bar_fill = ctk.CTkFrame(
             bar_bg,
-            height=8,
-            corner_radius=4,
-            fg_color=percent_color,
-            width=fill_width
+            height=6,
+            corner_radius=3,
+            fg_color=percent_color
         )
-        bar_fill.pack(side="left", fill="y")
-
+        # place() avec relwidth pour un pourcentage précis
+        bar_fill.place(x=0, y=0, relwidth=fill_width_pct, relheight=1.0)
+        
         # ─── FOOTER ───
         footer = ctk.CTkFrame(content, fg_color="transparent")
-        footer.pack(fill="x", pady=(4, 0))
+        footer.pack(fill="x", pady=(2, 0))
 
         status_colors = {
             "Terminé": "#10B981",
@@ -261,9 +253,92 @@ class GoalsGridView(ctk.CTkFrame):
             text_color="#94A3B8"
         ).pack(side="right")
 
+    def _create_image_with_shadow(self, image_path: str, width: int, height: int, radius: int = 12) -> Image.Image:
+        """
+        Crée une image avec ombre portée et coins arrondis.
+        """
+        # Charger et redimensionner l'image
+        img = Image.open(image_path).convert("RGBA")
+        img = self._crop_center(img, width, height)
+        img = img.resize((width, height), Image.Resampling.LANCZOS)
+
+        # Créer l'image avec coins arrondis
+        rounded = self._round_corners(img, radius)
+
+        # Créer l'ombre
+        shadow = self._create_shadow(width, height, radius)
+
+        # Combiner ombre + image
+        total_width = width + 20
+        total_height = height + 20
+        result = Image.new("RGBA", (total_width, total_height), (0, 0, 0, 0))
+
+        # Coller l'ombre (décalée)
+        result.paste(shadow, (5, 8), shadow)
+
+        # Coller l'image arrondie par-dessus
+        result.paste(rounded, (10, 5), rounded)
+
+        # Convertir en RGB pour CTkImage
+        rgb_result = Image.new("RGB", result.size, (255, 255, 255))
+        rgb_result.paste(result, mask=result.split()[3])
+
+        return rgb_result
+
+    def _crop_center(self, img: Image.Image, target_width: int, target_height: int) -> Image.Image:
+        """Recadre l'image au centre pour le ratio cible."""
+        w, h = img.size
+        target_ratio = target_width / target_height
+        current_ratio = w / h
+
+        if current_ratio > target_ratio:
+            new_w = int(h * target_ratio)
+            left = (w - new_w) // 2
+            img = img.crop((left, 0, left + new_w, h))
+        else:
+            new_h = int(w / target_ratio)
+            top = (h - new_h) // 2
+            img = img.crop((0, top, w, top + new_h))
+
+        return img
+
+    def _round_corners(self, img: Image.Image, radius: int) -> Image.Image:
+        """Arrondit les coins d'une image."""
+        # Créer un masque avec coins arrondis
+        mask = Image.new("L", img.size, 0)
+        draw = ImageDraw.Draw(mask)
+        draw.rounded_rectangle((0, 0, img.size[0], img.size[1]), radius=radius, fill=255)
+
+        # Appliquer le masque
+        rounded = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        rounded.paste(img, (0, 0))
+        rounded.putalpha(mask)
+
+        return rounded
+
+    def _create_shadow(self, width: int, height: int, radius: int) -> Image.Image:
+        """Crée une ombre portée douce."""
+        # Image plus grande pour l'ombre floue
+        shadow_size = (width + 20, height + 20)
+        shadow = Image.new("RGBA", shadow_size, (0, 0, 0, 0))
+
+        # Dessiner un rectangle noir semi-transparent avec coins arrondis
+        draw = ImageDraw.Draw(shadow)
+        shadow_rect = (5, 5, 5 + width, 5 + height)
+        draw.rounded_rectangle(shadow_rect, radius=radius, fill=(0, 0, 0, 40))
+
+        # Appliquer un flou gaussien
+        shadow = shadow.filter(ImageFilter.GaussianBlur(radius=6))
+
+        return shadow
+
     def _build_placeholder(self, parent, goal: Goal, color: str) -> None:
-        """Placeholder avec initiales du titre."""
-        placeholder = ctk.CTkFrame(parent, fg_color=color, corner_radius=16)
+        """Placeholder avec initiales du titre et ombre."""
+        # Conteneur avec padding pour l'ombre
+        container = ctk.CTkFrame(parent, fg_color="transparent")
+        container.pack(fill="both", expand=True, padx=5, pady=(0, 5))
+
+        placeholder = ctk.CTkFrame(container, fg_color=color, corner_radius=12)
         placeholder.pack(fill="both", expand=True)
 
         initials = "".join([w[0].upper() for w in goal.title.split()[:2]]) if goal.title else "??"

@@ -1,6 +1,6 @@
 """
 ui/main_window.py
-Fenêtre principale avec grille de goals et tri par progression.
+Fenêtre principale - Filtres sidebar mettent à jour la grille aussi.
 """
 
 import os
@@ -99,7 +99,7 @@ class MainWindow(ctk.CTk):
 
         # Recherche
         self.search_var = ctk.StringVar()
-        self.search_var.trace_add("write", lambda *args: self.refresh_goals_list())
+        self.search_var.trace_add("write", lambda *args: self._on_filter_changed())
 
         search_frame = ctk.CTkFrame(self.left_frame, fg_color="#F1F5F9", corner_radius=10)
         search_frame.grid(row=4, column=0, padx=15, pady=5, sticky="ew")
@@ -121,7 +121,7 @@ class MainWindow(ctk.CTk):
         self.status_filter = ctk.CTkOptionMenu(
             filters_row,
             values=["Tous", "Non commencé", "En cours", "Terminé"],
-            command=lambda _: self.refresh_goals_list(),
+            command=lambda _: self._on_filter_changed(),
             width=130,
             fg_color="#F1F5F9",
             button_color="#E2E8F0",
@@ -136,7 +136,7 @@ class MainWindow(ctk.CTk):
         self.priority_filter = ctk.CTkOptionMenu(
             filters_row,
             values=["Toutes", "Faible", "Moyenne", "Haute"],
-            command=lambda _: self.refresh_goals_list(),
+            command=lambda _: self._on_filter_changed(),
             width=130,
             fg_color="#F1F5F9",
             button_color="#E2E8F0",
@@ -162,7 +162,7 @@ class MainWindow(ctk.CTk):
         )
         self.toggle_completed_btn.grid(row=6, column=0, padx=15, pady=10, sticky="ew")
 
-        # Liste des goals (sidebar — compacte pour navigation rapide)
+        # Liste des goals (sidebar)
         self.goals_scroll = ctk.CTkScrollableFrame(
             self.left_frame,
             fg_color="transparent",
@@ -240,10 +240,8 @@ class MainWindow(ctk.CTk):
         self._set_nav_active("goals")
         self.selected_goal_id = None
 
-        # Récupérer les goals triés par progression
         goals = self._get_filtered_goals()
 
-        # Afficher la grille
         self.current_view = GoalsGridView(
             self.right_frame,
             service=self.service,
@@ -252,8 +250,7 @@ class MainWindow(ctk.CTk):
         )
         self.current_view.grid(row=0, column=0, sticky="nsew")
 
-        # Mettre à jour la sidebar aussi
-        self.refresh_goals_list()
+        self._refresh_sidebar_only()
 
     def _get_filtered_goals(self) -> list:
         """Récupère les goals filtrés et triés par progression."""
@@ -266,13 +263,11 @@ class MainWindow(ctk.CTk):
         if priority == "Toutes":
             priority = None
 
-        # Filtre principal : terminés ou non
         if self.show_completed:
             goals = self.service.list_goals(status="Terminé")
         else:
             goals = self.service.list_goals(exclude_status="Terminé")
 
-        # Appliquer filtres additionnels
         if status and status != "Terminé":
             goals = [g for g in goals if g.status == status]
         if priority:
@@ -281,7 +276,6 @@ class MainWindow(ctk.CTk):
             goals = [g for g in goals if search.lower() in g.title.lower()
                      or search.lower() in g.description.lower()]
 
-        # Tri par progression décroissante
         goals_with_progress = []
         for goal in goals:
             prog = self.service.get_goal_progress(goal.id)
@@ -291,12 +285,12 @@ class MainWindow(ctk.CTk):
         return [g for g, _ in goals_with_progress]
 
     def _on_goal_selected(self, goal_id: int) -> None:
-        """Callback quand un goal est sélectionné dans la grille."""
+        """Callback quand un goal est sélectionné."""
         self.selected_goal_id = goal_id
         self._show_goal_details(goal_id)
 
     def _show_goal_details(self, goal_id: int) -> None:
-        """Affiche les détails d'un goal dans le panneau droit."""
+        """Affiche les détails d'un goal."""
         goal = self.service.get_goal(goal_id)
         if not goal:
             return
@@ -307,9 +301,21 @@ class MainWindow(ctk.CTk):
             self.right_frame,
             goal=goal,
             service=self.service,
-            on_update=self.refresh_goals_list
+            on_update=self._on_goal_updated
         )
         self.current_view.grid(row=0, column=0, sticky="nsew")
+
+    def _on_goal_updated(self) -> None:
+        """
+        Appelé quand un goal est modifié (tâche cochée, etc.).
+        Rafraîchit la sidebar ET la grille si besoin.
+        """
+        # Toujours rafraîchir la sidebar (pourcentages à jour)
+        self._refresh_sidebar_only()
+
+        # Si on est sur la vue goals, rafraîchir aussi la grille
+        if isinstance(self.current_view, GoalsGridView):
+            self._refresh_grid_only()
 
     def _toggle_completed_filter(self) -> None:
         """Bascule entre goals non terminés et terminés."""
@@ -332,9 +338,20 @@ class MainWindow(ctk.CTk):
 
         self._show_goals_view()
 
-    def refresh_goals_list(self) -> None:
-        """Recharge la sidebar (liste compacte) et la grille si active."""
-        # Sidebar
+    def _on_filter_changed(self) -> None:
+        """
+        Appelé quand un filtre change (recherche, statut, priorité).
+        Met à jour la sidebar ET la grille si on est sur la vue goals.
+        """
+        # Toujours rafraîchir la sidebar
+        self._refresh_sidebar_only()
+
+        # Si on est sur la vue goals, rafraîchir aussi la grille
+        if isinstance(self.current_view, GoalsGridView):
+            self._refresh_grid_only()
+
+    def _refresh_sidebar_only(self) -> None:
+        """Recharge UNIQUEMENT la sidebar."""
         for widget in self.goals_scroll.winfo_children():
             widget.destroy()
 
@@ -372,12 +389,32 @@ class MainWindow(ctk.CTk):
         for goal in goals:
             self._create_sidebar_goal_item(goal)
 
-        # Si on est sur la vue goals, refresh aussi la grille
-        if isinstance(self.current_view, GoalsGridView):
-            # Mettre à jour la grille sans recréer la vue
-            goals = self._get_filtered_goals()
-            self.current_view.goals = goals
-            self.current_view._build_grid()
+    def _refresh_grid_only(self) -> None:
+        """Recharge UNIQUEMENT la grille (sans recréer la vue)."""
+        if not isinstance(self.current_view, GoalsGridView):
+            return
+
+        # Détruire l'ancienne grille
+        for widget in self.current_view.scroll.winfo_children():
+            widget.destroy()
+
+        # Récupérer les nouveaux goals filtrés
+        goals = self._get_filtered_goals()
+
+        # Mettre à jour le header
+        for widget in self.current_view.winfo_children():
+            if isinstance(widget, ctk.CTkFrame) and widget != self.current_view.scroll:
+                for child in widget.winfo_children():
+                    if isinstance(child, ctk.CTkLabel) and "Objectifs" in child.cget("text"):
+                        child.configure(text=f"🎯 Objectifs ({len(goals)})")
+
+        # Recréer les cards
+        if not goals:
+            self.current_view._build_empty_state()
+            return
+
+        for idx, goal in enumerate(goals):
+            self.current_view._create_goal_card(goal, idx)
 
     def _create_sidebar_goal_item(self, goal) -> None:
         """Item compact dans la sidebar."""
@@ -398,7 +435,6 @@ class MainWindow(ctk.CTk):
         item.bind("<Button-1>", lambda e, gid=goal.id: self._on_goal_selected(gid))
         item.configure(cursor="hand2")
 
-        # Hover
         item.bind("<Enter>", lambda e, it=item, gc=goal_color: it.configure(border_color=gc, border_width=2))
         item.bind("<Leave>", lambda e, it=item: it.configure(border_color="#E2E8F0", border_width=1))
 
@@ -406,7 +442,6 @@ class MainWindow(ctk.CTk):
         inner.pack(fill="both", expand=True, padx=10, pady=8)
         inner.bind("<Button-1>", lambda e, gid=goal.id: self._on_goal_selected(gid))
 
-        # Titre + %
         top = ctk.CTkFrame(inner, fg_color="transparent")
         top.pack(fill="x")
         top.bind("<Button-1>", lambda e, gid=goal.id: self._on_goal_selected(gid))
@@ -427,7 +462,6 @@ class MainWindow(ctk.CTk):
             text_color=percent_color
         ).pack(side="right")
 
-        # Mini barre
         bar_bg = ctk.CTkFrame(inner, height=3, corner_radius=2, fg_color="#E2E8F0")
         bar_bg.pack(fill="x", pady=(4, 0))
         bar_bg.pack_propagate(False)
@@ -458,7 +492,7 @@ class MainWindow(ctk.CTk):
             )
 
     def _open_new_goal_dialog(self) -> None:
-        dialog = GoalDialog(self, service=self.service, on_save=self.refresh_goals_list)
+        dialog = GoalDialog(self, service=self.service, on_save=self._on_filter_changed)
         dialog.grab_set()
 
     def run(self) -> None:

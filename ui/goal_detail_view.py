@@ -141,7 +141,7 @@ class GoalDetailView(ctk.CTkFrame):
         ).pack(side="left")
 
     def _build_progress_section(self) -> None:
-        """Section progression avec carte."""
+        """Section progression avec carte - widgets stockés pour mise à jour."""
         card = ctk.CTkFrame(self, fg_color="#FFFFFF", corner_radius=16, border_width=1, border_color="#E2E8F0")
         card.grid(row=1, column=0, sticky="ew", pady=(0, 15))
         card.grid_columnconfigure(1, weight=1)
@@ -162,36 +162,39 @@ class GoalDetailView(ctk.CTkFrame):
             text_color="#1E293B"
         ).pack(side="left")
 
-        ctk.CTkLabel(
+        # Compteur de tâches (stocké pour mise à jour)
+        self.tasks_counter_label = ctk.CTkLabel(
             header,
             text=f"{progress['completed_tasks']} / {progress['total_tasks']} tâches",
             font=ctk.CTkFont(size=13),
             text_color="#94A3B8"
-        ).pack(side="right")
+        )
+        self.tasks_counter_label.pack(side="right")
 
-        # Barre de progression moderne
-        bar_frame = ctk.CTkFrame(inner, fg_color="#E2E8F0", corner_radius=10, height=12)
-        bar_frame.pack(fill="x", pady=(15, 10))
-        bar_frame.pack_propagate(False)
+        # Barre de progression (stockée pour mise à jour)
+        self.progress_bar = ctk.CTkFrame(inner, fg_color="#E2E8F0", corner_radius=10, height=12)
+        self.progress_bar.pack(fill="x", pady=(15, 10))
+        self.progress_bar.pack_propagate(False)
 
-        fill_width = int(200 * (progress["percentage"] / 100)) if progress["total_tasks"] > 0 else 0
+        fill_width_pct = progress["percentage"] / 100.0
+        fill_width_pct = max(0.0, min(1.0, fill_width_pct))
 
         fill = ctk.CTkFrame(
-            bar_frame,
+            self.progress_bar,
             fg_color="#3B82F6" if progress["percentage"] < 100 else "#10B981",
-            corner_radius=10,
-            width=fill_width if fill_width > 0 else 1
+            corner_radius=10
         )
-        fill.pack(side="left", fill="y")
+        fill.place(x=0, y=0, relwidth=fill_width_pct, relheight=1.0)
 
-        # Pourcentage
+        # Pourcentage (stocké pour mise à jour)
         percent_color = "#10B981" if progress["percentage"] == 100 else "#3B82F6"
-        ctk.CTkLabel(
+        self.progress_label = ctk.CTkLabel(
             inner,
             text=f"{progress['percentage']:.0f}%",
             font=ctk.CTkFont(size=32, weight="bold"),
             text_color=percent_color
-        ).pack(anchor="w")
+        )
+        self.progress_label.pack(anchor="w")
 
     def _build_tasks_section(self) -> None:
         """Section tâches avec carte."""
@@ -234,7 +237,7 @@ class GoalDetailView(ctk.CTkFrame):
         self._refresh_tasks_list()
 
     def _refresh_tasks_list(self) -> None:
-        """Recharge la liste des tâches avec gestion sécurisée des widgets."""
+        """Recharge la liste des tâches ET met à jour la progression en temps réel."""
         for widget in self.tasks_scroll.winfo_children():
             try:
                 widget.destroy()
@@ -253,6 +256,9 @@ class GoalDetailView(ctk.CTkFrame):
                 font=ctk.CTkFont(size=13),
                 text_color="#94A3B8"
             ).pack(pady=30)
+            
+            # Mettre à jour la progression à 0%
+            self._update_progress_display({"percentage": 0, "completed_tasks": 0, "total_tasks": 0})
             return
 
         for task in tasks:
@@ -262,12 +268,44 @@ class GoalDetailView(ctk.CTkFrame):
         progress = self.service.get_goal_progress(self.goal.id)
         self._update_progress_display(progress)
 
+    def _update_progress_display(self, progress: dict) -> None:
+        """Met à jour l'affichage de progression en temps réel."""
+        percentage = progress["percentage"]
+        percent_color = "#10B981" if percentage >= 100 else "#3B82F6"
+        
+        # Mettre à jour le label de pourcentage
+        if hasattr(self, 'progress_label'):
+            self.progress_label.configure(text=f"{percentage:.0f}%", text_color=percent_color)
+        
+        # Mettre à jour la barre de progression
+        if hasattr(self, 'progress_bar'):
+            # Supprimer l'ancien fill
+            for widget in self.progress_bar.winfo_children():
+                widget.destroy()
+            
+            fill_width_pct = percentage / 100.0
+            fill_width_pct = max(0.0, min(1.0, fill_width_pct))
+            
+            bar_fill = ctk.CTkFrame(
+                self.progress_bar,
+                height=12,
+                corner_radius=10,
+                fg_color=percent_color
+            )
+            bar_fill.place(x=0, y=0, relwidth=fill_width_pct, relheight=1.0)
+        
+        # Mettre à jour le compteur de tâches
+        if hasattr(self, 'tasks_counter_label'):
+            self.tasks_counter_label.configure(
+                text=f"{progress['completed_tasks']} / {progress['total_tasks']} tâches"
+            )
+
     def _create_task_row(self, task) -> None:
-        """Ligne de tâche moderne avec bouton toggle au lieu de checkbox."""
+        """Ligne de tâche moderne avec bouton toggle."""
         row = ctk.CTkFrame(self.tasks_scroll, fg_color="#F8FAFC", corner_radius=10)
         row.pack(fill="x", pady=3)
 
-        # ─── BOUTON TOGGLE AU LIEU DE CHECKBOX (évite le bug CustomTkinter) ───
+        # Bouton toggle
         if task.is_completed:
             toggle_btn = ctk.CTkButton(
                 row,
@@ -346,10 +384,6 @@ class GoalDetailView(ctk.CTkFrame):
             command=lambda t=task: self._delete_task(t)
         ).pack(side="right", padx=(0, 15), pady=10)
 
-    def _update_progress_display(self, progress: dict) -> None:
-        """Met à jour l'affichage de progression."""
-        pass  # Sera implémenté si besoin de refresh dynamique
-
     def _toggle_task(self, task) -> None:
         """Bascule le statut d'une tâche."""
         new_status = "Terminée" if task.status != "Terminée" else "À faire"
@@ -387,7 +421,6 @@ class GoalDetailView(ctk.CTkFrame):
         ):
             self.service.delete_goal(self.goal.id)
             self.on_update()
-            # Détruire proprement sans erreur
             try:
                 self.destroy()
             except Exception:
