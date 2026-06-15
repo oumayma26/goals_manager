@@ -54,3 +54,4 @@ tmp/
 temp/
 *.tmp
 .env
+assets/
