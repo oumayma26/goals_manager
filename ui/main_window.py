@@ -1,6 +1,6 @@
 """
 ui/main_window.py
-Fenêtre principale - Filtres sidebar mettent à jour la grille aussi.
+Fenêtre principale avec Vision Board intégré.
 """
 
 import os
@@ -53,7 +53,7 @@ class MainWindow(ctk.CTk):
             border_width=0
         )
         self.left_frame.grid(row=0, column=0, sticky="nsew", padx=0, pady=0)
-        self.left_frame.grid_rowconfigure(7, weight=1)
+        self.left_frame.grid_rowconfigure(8, weight=1)
         self.left_frame.grid_propagate(False)
 
         # Logo / Titre
@@ -82,6 +82,11 @@ class MainWindow(ctk.CTk):
             nav_frame, "🎯 Mes Objectifs", self._show_goals_view, active=False
         )
         self.goals_btn.pack(fill="x", pady=3)
+
+        self.vision_btn = self._create_nav_button(
+            nav_frame, "✨ Vision Board", self._show_vision_board, active=False
+        )
+        self.vision_btn.pack(fill="x", pady=3)
 
         # Séparateur
         ctk.CTkFrame(self.left_frame, height=1, fg_color="#E2E8F0").grid(
@@ -168,7 +173,7 @@ class MainWindow(ctk.CTk):
             fg_color="transparent",
             label_text=""
         )
-        self.goals_scroll.grid(row=7, column=0, sticky="nsew", padx=10, pady=10)
+        self.goals_scroll.grid(row=8, column=0, sticky="nsew", padx=10, pady=10)
 
         # Bouton Nouveau Goal
         self.new_goal_btn = ctk.CTkButton(
@@ -182,7 +187,7 @@ class MainWindow(ctk.CTk):
             hover_color="#2563EB",
             text_color="#FFFFFF"
         )
-        self.new_goal_btn.grid(row=8, column=0, padx=15, pady=(5, 20), sticky="ew")
+        self.new_goal_btn.grid(row=9, column=0, padx=15, pady=(5, 20), sticky="ew")
 
     def _create_nav_button(self, parent, text, command, active=False):
         """Crée un bouton de navigation stylisé."""
@@ -235,7 +240,7 @@ class MainWindow(ctk.CTk):
         self.current_view.grid(row=0, column=0, sticky="nsew")
 
     def _show_goals_view(self) -> None:
-        """Affiche la grille de goals dans le panneau droit."""
+        """Affiche la grille de goals."""
         self._clear_right_panel()
         self._set_nav_active("goals")
         self.selected_goal_id = None
@@ -251,6 +256,20 @@ class MainWindow(ctk.CTk):
         self.current_view.grid(row=0, column=0, sticky="nsew")
 
         self._refresh_sidebar_only()
+
+    def _show_vision_board(self) -> None:
+        """Affiche le Vision Board."""
+        self._clear_right_panel()
+        self._set_nav_active("vision")
+
+        from ui.vision_board_view import VisionBoardView
+
+        self.current_view = VisionBoardView(
+            self.right_frame,
+            service=self.service,
+            db_manager=self.db
+        )
+        self.current_view.grid(row=0, column=0, sticky="nsew")
 
     def _get_filtered_goals(self) -> list:
         """Récupère les goals filtrés et triés par progression."""
@@ -305,18 +324,6 @@ class MainWindow(ctk.CTk):
         )
         self.current_view.grid(row=0, column=0, sticky="nsew")
 
-    def _on_goal_updated(self) -> None:
-        """
-        Appelé quand un goal est modifié (tâche cochée, etc.).
-        Rafraîchit la sidebar ET la grille si besoin.
-        """
-        # Toujours rafraîchir la sidebar (pourcentages à jour)
-        self._refresh_sidebar_only()
-
-        # Si on est sur la vue goals, rafraîchir aussi la grille
-        if isinstance(self.current_view, GoalsGridView):
-            self._refresh_grid_only()
-
     def _toggle_completed_filter(self) -> None:
         """Bascule entre goals non terminés et terminés."""
         self.show_completed = not self.show_completed
@@ -339,14 +346,14 @@ class MainWindow(ctk.CTk):
         self._show_goals_view()
 
     def _on_filter_changed(self) -> None:
-        """
-        Appelé quand un filtre change (recherche, statut, priorité).
-        Met à jour la sidebar ET la grille si on est sur la vue goals.
-        """
-        # Toujours rafraîchir la sidebar
+        """Appelé quand un filtre change."""
         self._refresh_sidebar_only()
+        if isinstance(self.current_view, GoalsGridView):
+            self._refresh_grid_only()
 
-        # Si on est sur la vue goals, rafraîchir aussi la grille
+    def _on_goal_updated(self) -> None:
+        """Appelé quand un goal est modifié."""
+        self._refresh_sidebar_only()
         if isinstance(self.current_view, GoalsGridView):
             self._refresh_grid_only()
 
@@ -390,25 +397,21 @@ class MainWindow(ctk.CTk):
             self._create_sidebar_goal_item(goal)
 
     def _refresh_grid_only(self) -> None:
-        """Recharge UNIQUEMENT la grille (sans recréer la vue)."""
+        """Recharge UNIQUEMENT la grille."""
         if not isinstance(self.current_view, GoalsGridView):
             return
 
-        # Détruire l'ancienne grille
         for widget in self.current_view.scroll.winfo_children():
             widget.destroy()
 
-        # Récupérer les nouveaux goals filtrés
         goals = self._get_filtered_goals()
 
-        # Mettre à jour le header
         for widget in self.current_view.winfo_children():
             if isinstance(widget, ctk.CTkFrame) and widget != self.current_view.scroll:
                 for child in widget.winfo_children():
                     if isinstance(child, ctk.CTkLabel) and "Objectifs" in child.cget("text"):
                         child.configure(text=f"🎯 Objectifs ({len(goals)})")
 
-        # Recréer les cards
         if not goals:
             self.current_view._build_empty_state()
             return
@@ -472,24 +475,23 @@ class MainWindow(ctk.CTk):
 
     def _set_nav_active(self, view: str) -> None:
         """Met à jour l'état des boutons de navigation."""
-        if view == "dashboard":
-            self.dashboard_btn.configure(
-                fg_color="#EFF6FF", text_color="#3B82F6",
-                font=ctk.CTkFont(size=13, weight="bold")
-            )
-            self.goals_btn.configure(
-                fg_color="transparent", text_color="#64748B",
-                font=ctk.CTkFont(size=13, weight="normal")
-            )
-        else:
-            self.dashboard_btn.configure(
-                fg_color="transparent", text_color="#64748B",
-                font=ctk.CTkFont(size=13, weight="normal")
-            )
-            self.goals_btn.configure(
-                fg_color="#EFF6FF", text_color="#3B82F6",
-                font=ctk.CTkFont(size=13, weight="bold")
-            )
+        buttons = {
+            "dashboard": self.dashboard_btn,
+            "goals": self.goals_btn,
+            "vision": self.vision_btn
+        }
+
+        for key, btn in buttons.items():
+            if key == view:
+                btn.configure(
+                    fg_color="#EFF6FF", text_color="#3B82F6",
+                    font=ctk.CTkFont(size=13, weight="bold")
+                )
+            else:
+                btn.configure(
+                    fg_color="transparent", text_color="#64748B",
+                    font=ctk.CTkFont(size=13, weight="normal")
+                )
 
     def _open_new_goal_dialog(self) -> None:
         dialog = GoalDialog(self, service=self.service, on_save=self._on_filter_changed)

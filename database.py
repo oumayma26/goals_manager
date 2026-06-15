@@ -70,6 +70,23 @@ class DatabaseManager:
             """)
 
             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS vision_board (
+                    goal_id INTEGER PRIMARY KEY,
+                    motivation_text TEXT DEFAULT '',
+                    pos_x REAL DEFAULT 0,
+                    pos_y REAL DEFAULT 0,
+                    width INTEGER DEFAULT 300,
+                    height INTEGER DEFAULT 220,
+                    font_size INTEGER DEFAULT 13,
+                    text_position TEXT DEFAULT 'bottom',
+                    text_color TEXT DEFAULT '#FFFFFF',
+                    text_bold INTEGER DEFAULT 1,
+                    celebrated INTEGER DEFAULT 0,
+                    FOREIGN KEY (goal_id) REFERENCES goals(id) ON DELETE CASCADE
+                )
+            """)
+
+            cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_tasks_goal_id ON tasks(goal_id)
             """)
             cursor.execute("""
