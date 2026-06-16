@@ -156,7 +156,6 @@ class HabitsView(ctk.CTkFrame):
         self.canvas.itemconfig(self.canvas_window, width=canvas_width)
 
     def _load_habits(self) -> None:
-        """Charge les habitudes et construit la grille."""
         habits = self.service.list_habits()
         logs = self.service.get_logs_for_month(self.current_year, self.current_month)
 
@@ -171,6 +170,13 @@ class HabitsView(ctk.CTkFrame):
             }
             for h in habits
         ]
+
+        # Calculer les streaks
+        streaks = {}
+        best_streaks = {}
+        for h in habits:
+            streaks[h["id"]] = self.service.get_current_streak(h["id"])
+            best_streaks[h["id"]] = self.service.get_best_streak(h["id"])
 
         if self.calendar_frame:
             self.calendar_frame.destroy()
@@ -188,6 +194,8 @@ class HabitsView(ctk.CTkFrame):
             month=self.current_month,
             habits=habits_data,
             logs_by_habit=logs,
+            streaks_by_habit=streaks,
+            best_streaks_by_habit=best_streaks,
             on_toggle=self._on_habit_toggle
         )
         self.calendar_frame.pack(fill="both", expand=True)
@@ -208,6 +216,12 @@ class HabitsView(ctk.CTkFrame):
             self.service.toggle_log(habit_id, date_iso, new_status)
         else:
             self.service.delete_log(habit_id, date_iso)
+        
+        # Mise à jour temps réel du streak
+        if self.calendar_frame:
+            new_streak = self.service.get_current_streak(habit_id)
+            new_best = self.service.get_best_streak(habit_id)
+            self.calendar_frame.update_streak(habit_id, new_streak, new_best)
 
     def _prev_month(self) -> None:
         self.current_month -= 1

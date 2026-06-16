@@ -85,6 +85,7 @@ class HabitService:
         if not habit:
             return 0
 
+        from datetime import date, timedelta
         today = date.today()
         streak = 0
         current = today
@@ -95,18 +96,61 @@ class HabitService:
 
             if log and log["status"] == "done":
                 streak += 1
-                current -= __import__('datetime').timedelta(days=1)
+                current -= timedelta(days=1)
             else:
-                # Vérifier si c'est un jour où l'habitude n'est pas attendue
-                weekday = current.weekday()  # 0=lundi
+                weekday = current.weekday()
                 freq = habit.get("frequency", "daily")
 
                 if freq == "custom" and habit.get("target_days"):
+                    import json
                     target_days = json.loads(habit["target_days"])
                     if weekday not in target_days:
-                        current -= __import__('datetime').timedelta(days=1)
+                        current -= timedelta(days=1)
                         continue
 
                 break
 
         return streak
+    
+    def get_best_streak(self, habit_id: int) -> int:
+        """Calcule la meilleure série historique."""
+        habit = self.get_habit(habit_id)
+        if not habit:
+            return 0
+
+        logs = self.db.get_habit_logs(habit_id)
+        if not logs:
+            return 0
+
+        from datetime import datetime, timedelta, date
+        log_map = {log["log_date"]: log["status"] for log in logs}
+
+        dates = sorted(log_map.keys())
+        first_date = datetime.strptime(dates[0], "%Y-%m-%d").date()
+        last_date = datetime.strptime(dates[-1], "%Y-%m-%d").date()
+
+        best = 0
+        current = 0
+
+        check_date = first_date
+        while check_date <= last_date:
+            date_iso = check_date.isoformat()
+            freq = habit.get("frequency", "daily")
+
+            is_expected = True
+            if freq == "custom" and habit.get("target_days"):
+                import json
+                target_days = json.loads(habit["target_days"])
+                if check_date.weekday() not in target_days:
+                    is_expected = False
+
+            if is_expected:
+                if log_map.get(date_iso) == "done":
+                    current += 1
+                    best = max(best, current)
+                else:
+                    current = 0
+
+            check_date += timedelta(days=1)
+
+        return best
