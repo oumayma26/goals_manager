@@ -1,6 +1,7 @@
 """
 ui/habits/habits_view.py
-Vue principale du tracker d'habitudes avec support arabe RTL.
+Vue principale du tracker d'habitudes avec support arabe RTL,
+archivage, suppression définitive et vue des archivées.
 """
 
 import calendar
@@ -18,12 +19,13 @@ from utils.arabic_text import (
 
 from database.database import DatabaseManager
 from services.habit_service import HabitService
+from services.goal_service import GoalService
 from .habit_calendar_grid import HabitCalendarGrid
 from .habit_dialog import HabitDialog
 
 
 class HabitsView(ctk.CTkFrame):
-    """Vue tracker d'habitudes avec grille calendrier + support arabe."""
+    """Vue tracker d'habitudes avec archivage, suppression et support arabe."""
 
     def __init__(self, master, db: DatabaseManager, **kwargs):
         super().__init__(master, fg_color="#F8FAFC", **kwargs)
@@ -33,6 +35,7 @@ class HabitsView(ctk.CTkFrame):
 
         self.current_year = date.today().year
         self.current_month = date.today().month
+        self.show_archived = False  # Toggle vue archivées
 
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(2, weight=1)
@@ -51,11 +54,12 @@ class HabitsView(ctk.CTkFrame):
         left = ctk.CTkFrame(header, fg_color="transparent")
         left.pack(side="left", pady=8)
 
-        # Titre avec support arabe
-        ArabicCTkLabel(
+        # Titre dynamique selon le mode
+        self.title_label = ArabicCTkLabel(
             left, text=prepare_for_display("📅 Habitudes"),
             font=ctk.CTkFont(size=20, weight="bold"), text_color="#1E293B"
-        ).pack(side="left")
+        )
+        self.title_label.pack(side="left")
 
         self.month_label = ArabicCTkLabel(
             left,
@@ -96,12 +100,26 @@ class HabitsView(ctk.CTkFrame):
         right = ctk.CTkFrame(toolbar, fg_color="transparent")
         right.pack(side="right")
 
-        ArabicCTkButton(
+        # Toggle "Voir archivées"
+        self.archive_toggle_btn = ArabicCTkButton(
+            right,
+            text=prepare_for_display("📦 Voir archivées"),
+            width=130, height=32, corner_radius=8,
+            fg_color="#F1F5F9", hover_color="#E2E8F0",
+            text_color="#64748B",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            command=self._toggle_archived_view
+        )
+        self.archive_toggle_btn.pack(side="right", padx=5)
+
+        # Nouvelle habitude (caché en mode archivées)
+        self.new_habit_btn = ArabicCTkButton(
             right, text=prepare_for_display("➕ Nouvelle habitude"), width=140, height=32, corner_radius=8,
             fg_color="#3B82F6", hover_color="#2563EB", text_color="#FFFFFF",
             font=ctk.CTkFont(size=12, weight="bold"),
             command=self._open_new_habit_dialog
-        ).pack(side="right", padx=2)
+        )
+        self.new_habit_btn.pack(side="right", padx=2)
 
     def _build_calendar_container(self) -> None:
         """Conteneur scrollable HORIZONTAL pour la grille."""
@@ -110,7 +128,6 @@ class HabitsView(ctk.CTkFrame):
         self.calendar_wrapper.grid_columnconfigure(0, weight=1)
         self.calendar_wrapper.grid_rowconfigure(0, weight=1)
 
-        # Canvas pour le scroll horizontal
         self.canvas = tk.Canvas(
             self.calendar_wrapper,
             bg="#F8FAFC",
@@ -118,7 +135,6 @@ class HabitsView(ctk.CTkFrame):
         )
         self.canvas.grid(row=0, column=0, sticky="nsew")
 
-        # Scrollbar horizontale
         self.h_scroll = tk.Scrollbar(
             self.calendar_wrapper,
             orient="horizontal",
@@ -128,19 +144,15 @@ class HabitsView(ctk.CTkFrame):
 
         self.canvas.configure(xscrollcommand=self.h_scroll.set)
 
-        # Frame interne
         self.scroll_inner = ctk.CTkFrame(self.canvas, fg_color="transparent")
         self.canvas_window = self.canvas.create_window((0, 0), window=self.scroll_inner, anchor="nw")
 
-        # Met à jour la scrollregion quand le frame interne change de taille
         self.scroll_inner.bind("<Configure>", self._on_inner_configure)
 
         self.calendar_frame: Optional[HabitCalendarGrid] = None
 
     def _on_inner_configure(self, event=None):
-        """Met à jour la région de scroll quand le contenu change."""
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-
         bbox = self.canvas.bbox("all")
         if bbox:
             content_width = bbox[2] - bbox[0]
@@ -151,10 +163,9 @@ class HabitsView(ctk.CTkFrame):
                 self.h_scroll.grid()
 
     def _load_habits(self) -> None:
-        habits = self.service.list_habits()
+        habits = self.service.list_habits(include_archived=self.show_archived)
         logs = self.service.get_logs_for_month(self.current_year, self.current_month)
 
-        # Reshape les titres arabes des habitudes
         habits_data = [
             {
                 "id": h["id"],
@@ -163,11 +174,11 @@ class HabitsView(ctk.CTkFrame):
                 "icon": h.get("icon", "•"),
                 "goal_title": prepare_for_display(h.get("goal_title", "")),
                 "task_name": prepare_for_display(h.get("task_name", "")),
+                "archived_at": h.get("archived_at"),
             }
             for h in habits
         ]
 
-        # Calculer les streaks
         streaks = {}
         best_streaks = {}
         for h in habits:
@@ -192,7 +203,11 @@ class HabitsView(ctk.CTkFrame):
             logs_by_habit=logs,
             streaks_by_habit=streaks,
             best_streaks_by_habit=best_streaks,
-            on_toggle=self._on_habit_toggle
+            on_toggle=self._on_habit_toggle,
+            on_archive=self._on_archive_habit if not self.show_archived else None,
+            on_restore=self._on_restore_habit if self.show_archived else None,
+            on_delete=self._on_delete_habit_permanently,
+            is_archived_view=self.show_archived,
         )
         self.calendar_frame.pack(fill="both", expand=True)
 
@@ -200,9 +215,11 @@ class HabitsView(ctk.CTkFrame):
         for widget in self.scroll_inner.winfo_children():
             widget.destroy()
 
+        msg = ("Aucune habitude archivée" if self.show_archived 
+               else "Aucune habitude\nCréez votre première habitude !")
         ArabicCTkLabel(
             self.scroll_inner,
-            text=prepare_for_display("Aucune habitude\nCréez votre première habitude pour commencer le suivi !"),
+            text=prepare_for_display(msg),
             font=ctk.CTkFont(size=14), text_color="#94A3B8",
             justify="center"
         ).pack(pady=100)
@@ -213,11 +230,101 @@ class HabitsView(ctk.CTkFrame):
         else:
             self.service.delete_log(habit_id, date_iso)
 
-        # Mise à jour temps réel du streak
         if self.calendar_frame:
             new_streak = self.service.get_current_streak(habit_id)
             new_best = self.service.get_best_streak(habit_id)
             self.calendar_frame.update_streak(habit_id, new_streak, new_best)
+
+    def _on_archive_habit(self, habit_id: int) -> None:
+        """Archive une habitude active."""
+        if self.service.archive_habit(habit_id):
+            self._load_habits()
+
+    def _on_restore_habit(self, habit_id: int) -> None:
+        """Restaure une habitude archivée."""
+        if self.service.restore_habit(habit_id):
+            self._load_habits()
+
+    def _on_delete_habit_permanently(self, habit_id: int) -> None:
+        """Suppression définitive avec confirmation."""
+        self._show_delete_confirm(habit_id)
+
+    def _show_delete_confirm(self, habit_id: int) -> None:
+        """Dialog de confirmation pour suppression définitive."""
+        confirm = ctk.CTkToplevel(self)
+        confirm.title("⚠️ Suppression définitive")
+        confirm.geometry("360x180")
+        confirm.transient(self)
+        confirm.grab_set()
+        confirm.configure(fg_color="#FFFFFF")
+
+        # Centrer
+        self.update_idletasks()
+        x = self.winfo_x() + (self.winfo_width() - 360) // 2
+        y = self.winfo_y() + (self.winfo_height() - 180) // 2
+        confirm.geometry(f"+{x}+{y}")
+
+        # Icône warning
+        ctk.CTkLabel(
+            confirm, text="🗑️",
+            font=ctk.CTkFont(size=32), text_color="#EF4444"
+        ).pack(pady=(15, 5))
+
+        ctk.CTkLabel(
+            confirm,
+            text="Supprimer définitivement ?",
+            font=ctk.CTkFont(size=14, weight="bold"), text_color="#1E293B"
+        ).pack()
+
+        ctk.CTkLabel(
+            confirm,
+            text="Cette action est irréversible.\nTous les logs seront perdus.",
+            font=ctk.CTkFont(size=11), text_color="#94A3B8"
+        ).pack(pady=5)
+
+        btn_frame = ctk.CTkFrame(confirm, fg_color="transparent")
+        btn_frame.pack(pady=15)
+
+        ctk.CTkButton(
+            btn_frame, text="Annuler", width=100, height=32,
+            fg_color="#F1F5F9", hover_color="#E2E8F0",
+            text_color="#475569", font=ctk.CTkFont(size=12, weight="bold"),
+            command=confirm.destroy
+        ).pack(side="left", padx=5)
+
+        ctk.CTkButton(
+            btn_frame, text="Supprimer", width=100, height=32,
+            fg_color="#EF4444", hover_color="#DC2626",
+            text_color="#FFFFFF", font=ctk.CTkFont(size=12, weight="bold"),
+            command=lambda: [
+                self.service.delete_habit_permanently(habit_id),
+                confirm.destroy(),
+                self._load_habits()
+            ]
+        ).pack(side="left", padx=5)
+
+    def _toggle_archived_view(self) -> None:
+        """Bascule entre vue active et vue archivée."""
+        self.show_archived = not self.show_archived
+
+        if self.show_archived:
+            self.title_label.configure(text=prepare_for_display("📦 Habitudes archivées"))
+            self.archive_toggle_btn.configure(
+                text=prepare_for_display("📅 Voir actives"),
+                fg_color="#EFF6FF", text_color="#3B82F6",
+                hover_color="#DBEAFE"
+            )
+            self.new_habit_btn.pack_forget()
+        else:
+            self.title_label.configure(text=prepare_for_display("📅 Habitudes"))
+            self.archive_toggle_btn.configure(
+                text=prepare_for_display("📦 Voir archivées"),
+                fg_color="#F1F5F9", text_color="#64748B",
+                hover_color="#E2E8F0"
+            )
+            self.new_habit_btn.pack(side="right", padx=2)
+
+        self._load_habits()
 
     def _prev_month(self) -> None:
         self.current_month -= 1
@@ -252,7 +359,6 @@ class HabitsView(ctk.CTkFrame):
         return f"{months[month]} {year}"
 
     def _open_new_habit_dialog(self) -> None:
-        from services.goal_service import GoalService
         dialog = HabitDialog(
             self,
             db=self.db,

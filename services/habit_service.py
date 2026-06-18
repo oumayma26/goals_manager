@@ -1,18 +1,24 @@
 """
 services/habit_service.py
-Service pour les habitudes.
+Service métier pour les habitudes.
 """
 
-import json
-from datetime import date
-from typing import Dict, List, Optional
+from typing import Optional, Dict, List
+from datetime import date, timedelta
+from calendar import monthrange
 
 from database.database import DatabaseManager
 
 
 class HabitService:
-    def __init__(self, db: DatabaseManager):
+    """Service métier pour la gestion des habitudes."""
+
+    def __init__(self, db: DatabaseManager) -> None:
         self.db = db
+
+    # ═══════════════════════════════════════════════════
+    # CRUD
+    # ═══════════════════════════════════════════════════
 
     def create_habit(self, **kwargs) -> int:
         return self.db.create_habit(**kwargs)
@@ -21,136 +27,140 @@ class HabitService:
         row = self.db.get_habit_by_id(habit_id)
         return dict(row) if row else None
 
-    def list_habits(self) -> List[dict]:
-        """Récupère les habitudes avec les noms de goal/tâche."""
-        rows = self.db.get_all_habits()
-        habits = []
-        for row in rows:
-            habit = dict(row)
-            
-            # Récupérer le nom du goal
-            if habit.get("goal_id"):
-                goal = self.db.get_goal_by_id(habit["goal_id"])
-                habit["goal_title"] = goal["title"] if goal else None
-            
-            # Récupérer le nom de la tâche
-            if habit.get("task_id"):
-                task = self.db.get_task_by_id(habit["task_id"])
-                habit["task_name"] = task["name"] if task else None
-            
-            habits.append(habit)
-        
-        return habits
-
     def update_habit(self, habit_id: int, **kwargs) -> bool:
         return self.db.update_habit(habit_id, **kwargs)
 
     def archive_habit(self, habit_id: int) -> bool:
+        """Archive (soft delete) — l'habitude disparaît de la vue principale."""
         return self.db.archive_habit(habit_id)
 
-    def delete_habit(self, habit_id: int) -> bool:
+    def restore_habit(self, habit_id: int) -> bool:
+        """Restaure une habitude archivée."""
+        with self.db._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE habits SET archived_at = NULL WHERE id = ?",
+                (habit_id,)
+            )
+            return cursor.rowcount > 0
+
+    def delete_habit_permanently(self, habit_id: int) -> bool:
+        """Suppression définitive — TOUT est effacé (habitude + logs)."""
         return self.db.delete_habit(habit_id)
 
-    def toggle_log(self, habit_id: int, log_date: str, status: str) -> None:
-        self.db.create_or_update_habit_log(habit_id, log_date, status)
+    def list_habits(self, include_archived: bool = False) -> List[dict]:
+        """Liste les habitudes. Par défaut, exclut les archivées."""
+        rows = self.db.get_all_habits(include_archived=include_archived)
+        return [dict(row) for row in rows]
 
-    def delete_log(self, habit_id: int, log_date: str) -> None:
-        self.db.delete_habit_log(habit_id, log_date)
+    # ═══════════════════════════════════════════════════
+    # LOGS
+    # ═══════════════════════════════════════════════════
+
+    def toggle_log(self, habit_id: int, date_iso: str, status: str) -> int:
+        return self.db.create_or_update_habit_log(habit_id, date_iso, status)
+
+    def delete_log(self, habit_id: int, date_iso: str) -> bool:
+        return self.db.delete_habit_log(habit_id, date_iso)
 
     def get_logs_for_month(self, year: int, month: int) -> Dict[int, Dict[str, str]]:
-        """Retourne {habit_id: {"2026-06-15": "done", ...}}."""
-        import calendar
-        _, last_day = calendar.monthrange(year, month)
+        """Récupère tous les logs du mois, groupés par habit_id."""
+        _, num_days = monthrange(year, month)
         start = f"{year}-{month:02d}-01"
-        end = f"{year}-{month:02d}-{last_day:02d}"
+        end = f"{year}-{month:02d}-{num_days:02d}"
 
-        result: Dict[int, Dict[str, str]] = {}
-        habits = self.list_habits()
+        with self.db._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT habit_id, log_date, status 
+                FROM habit_logs 
+                WHERE log_date >= ? AND log_date <= ?
+            """, (start, end))
 
-        for habit in habits:
-            logs = self.db.get_habit_logs(habit["id"], start, end)
-            result[habit["id"]] = {
-                log["log_date"]: log["status"]
-                for log in logs
-            }
+            result: Dict[int, Dict[str, str]] = {}
+            for row in cursor.fetchall():
+                hid = row["habit_id"]
+                if hid not in result:
+                    result[hid] = {}
+                result[hid][row["log_date"]] = row["status"]
+            return result
 
-        return result
-
-    def get_habit_stats(self, habit_id: int, year: int, month: int) -> dict:
-        return self.db.get_habit_month_stats(habit_id, year, month)
+    # ═══════════════════════════════════════════════════
+    # STREAKS
+    # ═══════════════════════════════════════════════════
 
     def get_current_streak(self, habit_id: int) -> int:
-        """Calcule la série actuelle de jours consécutifs réussis."""
-        habit = self.get_habit(habit_id)
-        if not habit:
-            return 0
-
-        from datetime import date, timedelta
-        today = date.today()
-        streak = 0
-        current = today
-
-        while True:
-            date_iso = current.isoformat()
-            log = self.db.get_habit_log_for_date(habit_id, date_iso)
-
-            if log and log["status"] == "done":
-                streak += 1
-                current -= timedelta(days=1)
-            else:
-                weekday = current.weekday()
-                freq = habit.get("frequency", "daily")
-
-                if freq == "custom" and habit.get("target_days"):
-                    import json
-                    target_days = json.loads(habit["target_days"])
-                    if weekday not in target_days:
-                        current -= timedelta(days=1)
-                        continue
-
-                break
-
-        return streak
-    
-    def get_best_streak(self, habit_id: int) -> int:
-        """Calcule la meilleure série historique."""
-        habit = self.get_habit(habit_id)
-        if not habit:
-            return 0
-
+        """Calcule le streak actuel (jours consécutifs avec 'done')."""
         logs = self.db.get_habit_logs(habit_id)
         if not logs:
             return 0
 
-        from datetime import datetime, timedelta, date
-        log_map = {log["log_date"]: log["status"] for log in logs}
+        done_dates = set()
+        for log in logs:
+            if log["status"] == "done":
+                done_dates.add(log["log_date"])
 
-        dates = sorted(log_map.keys())
-        first_date = datetime.strptime(dates[0], "%Y-%m-%d").date()
-        last_date = datetime.strptime(dates[-1], "%Y-%m-%d").date()
+        if not done_dates:
+            return 0
 
-        best = 0
-        current = 0
+        today = date.today().isoformat()
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
 
-        check_date = first_date
-        while check_date <= last_date:
-            date_iso = check_date.isoformat()
-            freq = habit.get("frequency", "daily")
+        # Le streak est valide si on a fait aujourd'hui ou hier
+        if today not in done_dates and yesterday not in done_dates:
+            return 0
 
-            is_expected = True
-            if freq == "custom" and habit.get("target_days"):
-                import json
-                target_days = json.loads(habit["target_days"])
-                if check_date.weekday() not in target_days:
-                    is_expected = False
+        streak = 0
+        check_date = date.today()
+        while True:
+            iso = check_date.isoformat()
+            if iso in done_dates:
+                streak += 1
+                check_date -= timedelta(days=1)
+            else:
+                # Tolérance : si c'est aujourd'hui et pas encore fait, on continue
+                if iso == today:
+                    check_date -= timedelta(days=1)
+                    continue
+                break
 
-            if is_expected:
-                if log_map.get(date_iso) == "done":
-                    current += 1
-                    best = max(best, current)
-                else:
-                    current = 0
+        return streak
 
-            check_date += timedelta(days=1)
+    def get_best_streak(self, habit_id: int) -> int:
+        """Meilleur streak historique."""
+        logs = self.db.get_habit_logs(habit_id)
+        done_dates = sorted([
+            log["log_date"] for log in logs if log["status"] == "done"
+        ])
+
+        if not done_dates:
+            return 0
+
+        best = 1
+        current = 1
+        for i in range(1, len(done_dates)):
+            prev = date.fromisoformat(done_dates[i - 1])
+            curr = date.fromisoformat(done_dates[i])
+            if (curr - prev).days == 1:
+                current += 1
+                best = max(best, current)
+            else:
+                current = 1
 
         return best
+
+    # ═══════════════════════════════════════════════════
+    # STATS
+    # ═══════════════════════════════════════════════════
+
+    def get_month_stats(self, habit_id: int, year: int, month: int) -> dict:
+        return self.db.get_habit_month_stats(habit_id, year, month)
+
+    def get_completion_rate(self, habit_id: int, days: int = 30) -> float:
+        """Taux de complétion sur les N derniers jours."""
+        end = date.today()
+        start = end - timedelta(days=days - 1)
+        logs = self.db.get_habit_logs(habit_id, start.isoformat(), end.isoformat())
+
+        done = sum(1 for log in logs if log["status"] == "done")
+        return round(done / days * 100, 1) if days > 0 else 0.0

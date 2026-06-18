@@ -1,8 +1,6 @@
 """
 ui/habits/habit_calendar_grid.py
-Grille calendrier mois par mois pour habit tracker.
-Style : lignes = habits, colonnes = jours, toggle rapide au clic.
-CORRECTION : CTkButton au lieu de CTkFrame+bind pour fiabilité des clics.
+Grille calendrier avec actions d'archivage, restauration et suppression.
 """
 
 import calendar
@@ -17,7 +15,7 @@ class HabitCalendarGrid(ctk.CTkFrame):
     """
     Grille mois × habits.
     Header : jours 1-31
-    Rows : une par habitude avec nom + cases à cocher
+    Rows : une par habitude avec nom + cases à cocher + actions
     """
 
     def __init__(
@@ -28,8 +26,12 @@ class HabitCalendarGrid(ctk.CTkFrame):
         habits: List[dict],
         logs_by_habit: Dict[int, Dict[str, str]],
         on_toggle: Callable[[int, str, Optional[str]], None],
+        on_archive: Optional[Callable[[int], None]] = None,
+        on_restore: Optional[Callable[[int], None]] = None,
+        on_delete: Optional[Callable[[int], None]] = None,
         streaks_by_habit: Optional[Dict[int, int]] = None,
         best_streaks_by_habit: Optional[Dict[int, int]] = None,
+        is_archived_view: bool = False,
         **kwargs
     ):
         super().__init__(master, fg_color="transparent", **kwargs)
@@ -39,10 +41,14 @@ class HabitCalendarGrid(ctk.CTkFrame):
         self.habits = habits
         self.logs_by_habit = logs_by_habit
         self.on_toggle = on_toggle
+        self.on_archive = on_archive
+        self.on_restore = on_restore
+        self.on_delete = on_delete
         self.streaks_by_habit = streaks_by_habit or {}
         self.best_streaks_by_habit = best_streaks_by_habit or {}
+        self.is_archived_view = is_archived_view
 
-        self._day_cells: Dict[tuple, ctk.CTkButton] = {}  # (habit_id, day) -> CTkButton
+        self._day_cells: Dict[tuple, ctk.CTkButton] = {}
         self._streak_frames: Dict[int, ctk.CTkFrame] = {}
         self._build_grid()
 
@@ -50,8 +56,8 @@ class HabitCalendarGrid(ctk.CTkFrame):
         """Construit la grille entière."""
         _, num_days = calendar.monthrange(self.year, self.month)
 
-        # Config grid : colonne 0 = nom habit, colonnes 1-31 = jours
-        self.grid_columnconfigure(0, minsize=180)
+        # Colonne 0 = nom + actions, colonnes 1-31 = jours
+        self.grid_columnconfigure(0, minsize=220)  # Plus large pour les boutons
         for day in range(1, num_days + 1):
             self.grid_columnconfigure(day, minsize=36)
 
@@ -86,11 +92,12 @@ class HabitCalendarGrid(ctk.CTkFrame):
         title = habit["title"]
         streak = self.streaks_by_habit.get(habit_id, 0)
         best = self.best_streaks_by_habit.get(habit_id, 0)
+        is_archived = habit.get("archived_at") is not None
 
         name_cell = ctk.CTkFrame(self, fg_color="#FFFFFF", corner_radius=6, height=50)
         name_cell.grid(row=row, column=0, sticky="nsew", padx=2, pady=1)
 
-        # Gauche : info habit
+        # ─── Gauche : info habit ───
         left = ctk.CTkFrame(name_cell, fg_color="transparent")
         left.pack(side="left", fill="both", expand=True, padx=10)
 
@@ -101,9 +108,16 @@ class HabitCalendarGrid(ctk.CTkFrame):
             left,
             text=f"{icon} {title}",
             font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#1E293B",
+            text_color="#1E293B" if not is_archived else "#94A3B8",
             anchor="w"
         ).pack(side="left")
+
+        # Badge "ARCHIVÉ"
+        if is_archived:
+            ctk.CTkLabel(
+                left, text="📦",
+                font=ctk.CTkFont(size=10), text_color="#94A3B8"
+            ).pack(side="left", padx=(4, 0))
 
         linked_text = self._get_linked_text(habit)
         if linked_text:
@@ -115,40 +129,84 @@ class HabitCalendarGrid(ctk.CTkFrame):
                 anchor="w"
             ).pack(side="left", padx=(8, 0))
 
-        # Droite : streak (utilise _render_streak)
+        # ─── Droite : streak + actions ───
         right = ctk.CTkFrame(name_cell, fg_color="transparent")
         right.pack(side="right", padx=(0, 10))
+
+        # Streak
         self._streak_frames[habit_id] = right
         self._render_streak(right, streak, best)
 
+        # ─── Boutons d'action ───
+        actions = ctk.CTkFrame(name_cell, fg_color="transparent")
+        actions.pack(side="right", padx=(0, 5))
+
+        if self.is_archived_view:
+            # Mode archivé : Restaurer + Supprimer
+            ctk.CTkButton(
+                actions, text="↩️", width=28, height=28, corner_radius=4,
+                fg_color="#D1FAE5", hover_color="#A7F3D0",
+                text_color="#059669", font=ctk.CTkFont(size=12),
+                command=lambda hid=habit_id: self._on_restore(hid) if self.on_restore else None
+            ).pack(side="left", padx=1)
+
+            ctk.CTkButton(
+                actions, text="🗑️", width=28, height=28, corner_radius=4,
+                fg_color="#FEE2E2", hover_color="#FECACA",
+                text_color="#DC2626", font=ctk.CTkFont(size=12),
+                command=lambda hid=habit_id: self._on_delete(hid) if self.on_delete else None
+            ).pack(side="left", padx=1)
+        else:
+            # Mode actif : Archiver + Supprimer
+            ctk.CTkButton(
+                actions, text="📦", width=28, height=28, corner_radius=4,
+                fg_color="#F1F5F9", hover_color="#E2E8F0",
+                text_color="#64748B", font=ctk.CTkFont(size=12),
+                command=lambda hid=habit_id: self._on_archive(hid) if self.on_archive else None
+            ).pack(side="left", padx=1)
+
+            ctk.CTkButton(
+                actions, text="🗑️", width=28, height=28, corner_radius=4,
+                fg_color="#FEE2E2", hover_color="#FECACA",
+                text_color="#DC2626", font=ctk.CTkFont(size=12),
+                command=lambda hid=habit_id: self._on_delete(hid) if self.on_delete else None
+            ).pack(side="left", padx=1)
+
         # ─── Cases jours ───
         for day in range(1, num_days + 1):
-            self._build_day_cell(habit_id, day, row, color)
+            self._build_day_cell(habit_id, day, row, color, is_archived)
 
-    def _build_day_cell(self, habit_id: int, day: int, row: int, habit_color: str) -> None:
-        """Une case jour individuelle — CTkButton pour fiabilité du clic."""
+    def _build_day_cell(self, habit_id: int, day: int, row: int, habit_color: str, is_archived: bool = False) -> None:
+        """Une case jour individuelle."""
         date_iso = f"{self.year}-{self.month:02d}-{day:02d}"
         status = self._get_status(habit_id, date_iso)
         is_today = self._is_today(day)
 
-        if status == "done":
-            bg = habit_color
-            fg = "#FFFFFF"
-            text = "✓"
-        elif status == "missed":
-            bg = "#FEE2E2"
-            fg = "#DC2626"
-            text = "✗"
-        elif status == "partial":
-            bg = "#FEF3C7"
-            fg = "#D97706"
-            text = "~"
-        else:
-            bg = "#F8FAFC" if not is_today else "#EFF6FF"
+        if is_archived:
+            # Grisé pour les archivées
+            bg = "#F1F5F9"
             fg = "#CBD5E1"
-            text = ""
+            text = "✓" if status == "done" else "✗" if status == "missed" else "~" if status == "partial" else ""
+            state = "disabled"
+        else:
+            if status == "done":
+                bg = habit_color
+                fg = "#FFFFFF"
+                text = "✓"
+            elif status == "missed":
+                bg = "#FEE2E2"
+                fg = "#DC2626"
+                text = "✗"
+            elif status == "partial":
+                bg = "#FEF3C7"
+                fg = "#D97706"
+                text = "~"
+            else:
+                bg = "#F8FAFC" if not is_today else "#EFF6FF"
+                fg = "#CBD5E1"
+                text = ""
+            state = "normal"
 
-        # CTkButton = clic fiable, pas besoin de bind manuel
         cell = ctk.CTkButton(
             self,
             text=text,
@@ -156,11 +214,12 @@ class HabitCalendarGrid(ctk.CTkFrame):
             height=32,
             corner_radius=4,
             fg_color=bg,
-            hover_color=bg,           # Pas de changement au survol
+            hover_color=bg,
             text_color=fg,
             font=ctk.CTkFont(size=12, weight="bold"),
             border_width=1 if is_today else 0,
             border_color="#3B82F6",
+            state=state,
             command=lambda hid=habit_id, d=date_iso, s=status: self._on_cell_click(hid, d, s)
         )
         cell.grid(row=row, column=day, sticky="nsew", padx=1, pady=1)
@@ -218,6 +277,18 @@ class HabitCalendarGrid(ctk.CTkFrame):
         else:
             self.logs_by_habit[habit_id].pop(date_iso, None)
 
+    def _on_archive(self, habit_id: int) -> None:
+        if self.on_archive:
+            self.on_archive(habit_id)
+
+    def _on_restore(self, habit_id: int) -> None:
+        if self.on_restore:
+            self.on_restore(habit_id)
+
+    def _on_delete(self, habit_id: int) -> None:
+        if self.on_delete:
+            self.on_delete(habit_id)
+
     def _get_status(self, habit_id: int, date_iso: str) -> Optional[str]:
         return self.logs_by_habit.get(habit_id, {}).get(date_iso)
 
@@ -241,12 +312,12 @@ class HabitCalendarGrid(ctk.CTkFrame):
         elif goal_title:
             return f"↳ {goal_title}"
         return ""
-    
+
     def _render_streak(self, parent: ctk.CTkFrame, streak: int, best: int) -> None:
         """Affiche le streak dans le frame donné."""
         for widget in parent.winfo_children():
             widget.destroy()
-        
+
         if streak > 0:
             streak_color = "#EF4444" if streak >= 7 else "#F59E0B" if streak >= 3 else "#94A3B8"
             ctk.CTkLabel(
